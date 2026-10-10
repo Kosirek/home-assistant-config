@@ -1,0 +1,250 @@
+blueprint:
+  name: Zaawansowane sterowanie piecem CO (Pogoda, Harmonogram, Strefy)
+  description: >
+    Steruje piecem (stycznik/przełącznik/kocioł) w oparciu o stan wielu głowic/termostatów,
+    temperaturę zewnętrzną, sezon grzewczy oraz harmonogramy czasowe z wbudowaną histerezą.
+  domain: automation
+  input:
+    # --- WYJŚCIE STERUJĄCE PIECEM ---
+    boiler_switch:
+      name: Przełącznik / Stycznik pieca
+      description: Encja włączająca kocioł/piec CO (switch lub input_boolean).
+      selector:
+        target:
+          entity:
+            domain: [switch, input_boolean]
+
+    # --- STREFY I TERMOSTATY ---
+    climate_entities:
+      name: Głowice / Termostaty (Climate)
+      description: Wybierz termostaty z pomieszczeń. Piec załączy się, gdy którykolwiek zgłosi zapotrzebowanie na ciepło (stan 'heating').
+      default: []
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+
+    temp_sensors:
+      name: Dodatkowe czujniki temperatury wewnątrz
+      description: opcjonalnie - czujniki do wyliczenia średniej temperatury w domu.
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+          multiple: true
+
+    target_indoor_temp:
+      name: Minimalna oczekiwana temperatura wewnątrz (°C)
+      description: Jeśli średnia z czujników wewnętrznych spadnie poniżej tej wartości, piec wystartuje.
+      default: 20.5
+      selector:
+        number:
+          min: 15.0
+          max: 26.0
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+
+    # --- WARUNKI ZEWNĘTRZNE I POGODA ---
+    outdoor_temp_sensor:
+      name: Czujnik temperatury zewnętrznej
+      description: Służy do blokowania grzania, gdy na zewnątrz jest ciepło.
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    max_outdoor_temp_for_heating:
+      name: Próg temperatury zewnętrznej (°C)
+      description: Powyżej tej temperatury zewnętrznej piec NIE załączy się (zabezpieczenie lato/wiosna).
+      default: 16.0
+      selector:
+        number:
+          min: 10.0
+          max: 22.0
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+
+    heating_season_entity:
+      name: Encja Sezonu Grzewczego (Opcjonalnie)
+      description: Przełącznik (input_boolean) lub czujnik sezonu (season). Jeśli wyłączony, piec nie zadziała.
+      default: []
+      selector:
+        entity:
+
+    # --- HARMONOGRAM 1 (Dni powszednie) ---
+    schedule_1_after:
+      name: "Harmonogram 1: Start"
+      default: "05:30:00"
+      selector:
+        time: {}
+
+    schedule_1_before:
+      name: "Harmonogram 1: Stop"
+      default: "22:00:00"
+      selector:
+        time: {}
+
+    schedule_1_days:
+      name: "Harmonogram 1: Dni"
+      default: [mon, tue, wed, thu, fri]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Poniedziałek
+              value: mon
+            - label: Wtorek
+              value: tue
+            - label: Środa
+              value: wed
+            - label: Czwartek
+              value: thu
+            - label: Piątek
+              value: fri
+            - label: Sobota
+              value: sat
+            - label: Niedziela
+              value: sun
+
+    # --- HARMONOGRAM 2 (Weekend) ---
+    schedule_2_after:
+      name: "Harmonogram 2: Start"
+      default: "06:30:00"
+      selector:
+        time: {}
+
+    schedule_2_before:
+      name: "Harmonogram 2: Stop"
+      default: "23:00:00"
+      selector:
+        time: {}
+
+    schedule_2_days:
+      name: "Harmonogram 2: Dni"
+      default: [sat, sun]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Poniedziałek
+              value: mon
+            - label: Wtorek
+              value: tue
+            - label: Środa
+              value: wed
+            - label: Czwartek
+              value: thu
+            - label: Piątek
+              value: fri
+            - label: Sobota
+              value: sat
+            - label: Niedziela
+              value: sun
+
+    # --- HISTEREZA I MINIMALNY CZAS PRACY ---
+    min_run_time:
+      name: Minimalny czas pracy pieca (minuty)
+      description: Zapobiega zbyt częstemu taktowaniu kocioła (ochrona palnika/pompy).
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: "min"
+          mode: box
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - trigger: time_pattern
+    minutes: "/5"
+  - trigger: state
+    entity_id: !input climate_entities
+  - trigger: numeric_state
+    entity_id: !input outdoor_temp_sensor
+
+variables:
+  outdoor_sensor: !input outdoor_temp_sensor
+  max_outdoor_temp: !input max_outdoor_temp_for_heating
+  season_entity: !input heating_season_entity
+  climates: !input climate_entities
+  indoor_sensors: !input temp_sensors
+  target_in_temp: !input target_indoor_temp
+  min_run: !input min_run_time
+
+action:
+  # 1. SPRAWDZENIE GLOBALNYCH WARUNKÓW BLOKUJĄCYCH (Sezon + Pogoda zewnętrzna + Harmonogram)
+  - if:
+      # Czy sezon grzewczy jest aktywny?
+      - condition: template
+        value_template: >
+          {% if season_entity != [] and states(season_entity) not in ['unknown', 'unavailable'] %}
+            {{ states(season_entity) in ['on', 'heat', 'heating', 'autumn', 'winter'] }}
+          {% else %}
+            true
+          {% endif %}
+      # Czy temperatura zewnętrzna pozwala na grzanie?
+      - condition: template
+        value_template: >
+          {% if outdoor_sensor != [] and states(outdoor_sensor) not in ['unknown', 'unavailable'] %}
+            {{ states(outdoor_sensor) | float < max_outdoor_temp }}
+          {% else %}
+            true
+          {% endif %}
+      # Czy mieścimy się w którymś z harmonogramów?
+      - condition: or
+        conditions:
+          - condition: time
+            after: !input schedule_1_after
+            before: !input schedule_1_before
+            weekday: !input schedule_1_days
+          - condition: time
+            after: !input schedule_2_after
+            before: !input schedule_2_before
+            weekday: !input schedule_2_days
+
+    then:
+      # 2. EVALUACJA ZAPOTRZEBOWANIA NA CIEPŁO
+      - variables:
+          heat_demanded_by_climate: >
+            {% if climates != [] %}
+              {{ climates | map('states') | select('eq', 'heating') | list | count > 0 }}
+            {% else %}
+              false
+            {% endif %}
+          heat_demanded_by_temp: >
+            {% if indoor_sensors != [] %}
+              {% set valid_temps = indoor_sensors | map('states') | reject('in', ['unknown', 'unavailable']) | map('float') | list %}
+              {% if valid_temps | length > 0 %}
+                {{ (valid_temps | sum / valid_temps | length) < target_in_temp }}
+              {% else %}
+                false
+              {% endif %}
+            {% else %}
+              false
+            {% endif %}
+          should_heat: "{{ heat_demanded_by_climate or heat_demanded_by_temp }}"
+
+      # 3. STEROWANIE PIECEM
+      - if:
+          - condition: template
+            value_template: "{{ should_heat }}"
+        then:
+          - action: homeassistant.turn_on
+            target: !input boiler_switch
+        else:
+          # Przed wyłączeniem upewnij się, że przetrzymano minimalny czas pracy
+          - delay:
+              minutes: "{{ min_run }}"
+          - action: homeassistant.turn_off
+            target: !input boiler_switch
+
+    else:
+      # Jeśli warunki globalne (pogoda/harmonogram/sezon) NIE są spełnione -> Wyłącz piec
+      - action: homeassistant.turn_off
+        target: !input boiler_switch
