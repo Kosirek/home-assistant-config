@@ -1,0 +1,279 @@
+blueprint:
+  name: Zaawansowane sterowanie światłem (z wieloma czujnikami resetu)
+  description: >
+    Steruje światłem na podstawie obecności, natężenia LUX oraz harmonogramów. 
+    Oferuje opóźnienie wyłączenia, detekcję ręcznego włączenia (blokada ruchu) 
+    oraz maksymalny czas świecenia z możliwością resetu wielu czujników/urządzeń.
+  domain: automation
+  input:
+    # --- ENCJE PODSTAWOWE ---
+    presence_sensor:
+      name: Czujnik obecności / ruchu (Binary Sensor)
+      description: Encja wykrywająca obecność (stan 'on').
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: [occupancy, motion]
+
+    light_target:
+      name: Światło / Przełącznik
+      description: Docelowa encja światła lub włącznika.
+      selector:
+        target:
+          entity:
+            domain: [light, switch]
+
+    # --- OPÓŹNIENIE WYŁĄCZENIA ---
+    off_delay:
+      name: Opóźnienie wyłączenia (sekundy)
+      description: Czas od momentu zaniku ruchu do faktycznego wyłączenia światła.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: "s"
+          mode: box
+
+    # --- ZABLOKOWANIE PRZY MANUALNYM WŁĄCZENIU ---
+    enable_manual_override:
+      name: Obsługa ręcznego włączenia (Blokada)
+      description: >
+        Jeśli włączysz tę opcję, ręczne włączenie światła (np. z przycisku/aplikacji) 
+        zablokuje automatyczne gaszenie i sterowanie ruchem aż do ręcznego wyłączenia.
+      default: false
+      selector:
+        boolean: {}
+
+    # --- MAKSYMALNY CZAS ŚWIECENIA I RESET CZUJNIKÓW ---
+    enable_max_time:
+      name: Ogranicz maksymalny czas włączenia
+      description: Zabezpieczenie przed ciągłym świeceniem (np. przy zaciętym czujniku mmWave).
+      default: false
+      selector:
+        boolean: {}
+
+    max_on_time:
+      name: Maksymalny czas włączenia (minuty)
+      description: Czas, po którym światło zostanie bezwzględnie wyłączone.
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: "min"
+          mode: box
+
+    sensor_reset_target:
+      name: Encje / Urządzenia do resetu (Opcjonalnie)
+      description: >
+        Możesz wybrać wiele przycisków resetu (button) lub przełączników zasilania (switch) 
+        czujników obecności. Automatyzacja wywoła reset na wszystkich wskazanych obiektach.
+      default: {}
+      selector:
+        target:
+          entity:
+            domain: [button, switch]
+
+    # --- REAKCJA NA NATĘŻENIE OŚWIETLENIA (LUX) ---
+    use_lux_check:
+      name: Reakcja na natężenie oświetlenia (LUX)
+      description: Światło zapala się tylko poniżej ustawionego progu LUX.
+      default: true
+      selector:
+        boolean: {}
+
+    illuminance_sensor:
+      name: Czujnik natężenia światła (LUX)
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          device_class: illuminance
+
+    illuminance_threshold:
+      name: Próg natężenia światła (LUX)
+      default: 18
+      selector:
+        number:
+          min: 0
+          max: 1000
+          unit_of_measurement: "lx"
+          mode: slider
+
+    # --- HARMONOGRAM 1 (Pon-Czw, Nie) ---
+    schedule_1_after:
+      name: "Harmonogram 1: Start"
+      default: "06:00:00"
+      selector:
+        time: {}
+
+    schedule_1_before:
+      name: "Harmonogram 1: Stop"
+      default: "23:00:00"
+      selector:
+        time: {}
+
+    schedule_1_days:
+      name: "Harmonogram 1: Dni"
+      default: [mon, tue, wed, thu, sun]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Poniedziałek
+              value: mon
+            - label: Wtorek
+              value: tue
+            - label: Środa
+              value: wed
+            - label: Czwartek
+              value: thu
+            - label: Piątek
+              value: fri
+            - label: Sobota
+              value: sat
+            - label: Niedziela
+              value: sun
+
+    # --- HARMONOGRAM 2 (Pt-Sob) ---
+    schedule_2_after:
+      name: "Harmonogram 2: Start"
+      default: "07:00:00"
+      selector:
+        time: {}
+
+    schedule_2_before:
+      name: "Harmonogram 2: Stop"
+      default: "00:00:00"
+      selector:
+        time: {}
+
+    schedule_2_days:
+      name: "Harmonogram 2: Dni"
+      default: [fri, sat]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Poniedziałek
+              value: mon
+            - label: Wtorek
+              value: tue
+            - label: Środa
+              value: wed
+            - label: Czwartek
+              value: thu
+            - label: Piątek
+              value: fri
+            - label: Sobota
+              value: sat
+            - label: Niedziela
+              value: sun
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - trigger: state
+    entity_id: !input presence_sensor
+    id: presence_change
+  - trigger: numeric_state
+    entity_id: !input illuminance_sensor
+    below: !input illuminance_threshold
+    id: lux_change
+
+variables:
+  use_lux: !input use_lux_check
+  lux_sensor: !input illuminance_sensor
+  lux_limit: !input illuminance_threshold
+  manual_override: !input enable_manual_override
+  max_time_active: !input enable_max_time
+  max_time_min: !input max_on_time
+  reset_target: !input sensor_reset_target
+  delay_sec: !input off_delay
+
+action:
+  # 1. WŁĄCZENIE ŚWIATŁA PRZEZ CZUJNIK RUCHU
+  - if:
+      - condition: state
+        entity_id: !input presence_sensor
+        state: "on"
+      - condition: template
+        value_template: >
+          {% if use_lux %}
+            {% if lux_sensor != [] and states(lux_sensor) not in ['unknown', 'unavailable'] %}
+              {{ states(lux_sensor) | float < lux_limit }}
+            {% else %}
+              true
+            {% endif %}
+          {% else %}
+            true
+          {% endif %}
+      - condition: or
+        conditions:
+          - condition: time
+            after: !input schedule_1_after
+            before: !input schedule_1_before
+            weekday: !input schedule_1_days
+          - condition: time
+            after: !input schedule_2_after
+            before: !input schedule_2_before
+            weekday: !input schedule_2_days
+    then:
+      - action: homeassistant.turn_on
+        target: !input light_target
+
+  # 2. PROCES WYŁĄCZANIA (Z UWZGLĘDNIENIEM OPÓŹNIENIA I STANU MANUALNEGO)
+  - if:
+      - condition: state
+        entity_id: !input presence_sensor
+        state: "off"
+    then:
+      - delay:
+          seconds: "{{ delay_sec }}"
+      
+      - if:
+          - condition: state
+            entity_id: !input presence_sensor
+            state: "off"
+          - condition: template
+            value_template: >
+              {% if manual_override %}
+                {{ trigger.to_state.context.parent_id is not none or trigger.to_state.context.user_id is none }}
+              {% else %}
+                true
+              {% endif %}
+        then:
+          - action: homeassistant.turn_off
+            target: !input light_target
+
+  # 3. ZABEZPIECZENIE MAKSYMALNEGO CZASU ŚWIECENIA I RESET WIELU CZUJNIKÓW
+  - if:
+      - condition: template
+        value_template: "{{ max_time_active }}"
+    then:
+      - delay:
+          minutes: "{{ max_time_min }}"
+      - action: homeassistant.turn_off
+        target: !input light_target
+      
+      # Jeśli zdefiniowano jakiekolwiek cele do resetu:
+      - if:
+          - condition: template
+            value_template: "{{ reset_target != {} }}"
+        then:
+          # Naciśnij wszystkie encje typu button w ramach podanego celu
+          - action: button.press
+            target: !input sensor_reset_target
+            continue_on_error: true
+
+          # Wyłącz i włącz przełączniki zasilania (dla czujników odcinanych od prądu)
+          - action: homeassistant.turn_off
+            target: !input sensor_reset_target
+            continue_on_error: true
+          - delay:
+              seconds: 3
+          - action: homeassistant.turn_on
+            target: !input sensor_reset_target
+            continue_on_error: true
