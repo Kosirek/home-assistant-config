@@ -1,0 +1,72 @@
+alias: Wyłączenie grzania
+description: ''
+triggers:
+  - trigger: state
+    entity_id:
+      - sensor.temperatutra_pracownia_temperatura
+      - sensor.temperatura_wiatrolap_temperatura
+      - sensor.temperatura_salon_temperatura
+      - sensor.temperatura_piecowe_temperatura
+    enabled: false
+conditions:
+  - condition: and
+    conditions:
+      - condition: state
+        entity_id: light.wlacznik_grzania
+        state: 'on'
+      - condition: or
+        conditions:
+          - condition: and
+            conditions:
+              - condition: numeric_state
+                entity_id: sensor.temperatutra_pracownia_temperatura
+                above: 23
+              - condition: numeric_state
+                entity_id: sensor.temperatura_salon_temperatura
+                above: 22
+              - condition: or
+                conditions:
+                  - condition: time
+                    after: '05:30:00'
+                    before: '22:00:00'
+                    weekday:
+                      - mon
+                      - tue
+                      - wed
+                      - thu
+                      - sun
+                  - condition: time
+                    after: '06:00:00'
+                    before: '23:30:00'
+                    weekday:
+                      - fri
+                      - sat
+          - condition: and
+            conditions:
+              - condition: numeric_state
+                entity_id: sensor.temperatutra_pracownia_temperatura
+                above: 19
+              - condition: numeric_state
+                entity_id: sensor.temperatura_salon_temperatura
+                above: 19
+              - condition: or
+                conditions:
+                  - condition: time
+                    after: '22:00:00'
+                    weekday:
+                      - mon
+                      - tue
+                      - wed
+                      - thu
+                      - sun
+                  - condition: time
+                    after: '23:30:00'
+                    weekday:
+                      - fri
+                      - sat
+actions:
+  - type: turn_off
+    device_id: c266826b086da741c84e66459146bab3
+    entity_id: 00b95851ce8b3e939023fac3c89a203b
+    domain: light
+mode: single
